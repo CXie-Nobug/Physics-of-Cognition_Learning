@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 # EEG Channel Groups as requested in your provided info
+# Zach Modification
 CHANNEL_GROUPS = {
     "BLT": ["C3", "C4", "CP1", "CP2"],
     "BLA": ["T7", "T8", "TP7", "TP8"],
