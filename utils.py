@@ -13,7 +13,6 @@ CHANNEL_GROUPS = {
     "VISI": ["C3", "CP1", "C4", "CP2", "F3", "FC1", "FC5", "F4", "FC2", "FC6"],
     # Stimulus Uncertainty
     "RS": ["C3", "CP1", "C4", "CP2", "P1", "P5", "P2", "P6"],
-
 }
 
 FREQ_BANDS = {
@@ -23,7 +22,8 @@ FREQ_BANDS = {
     "alpha": (8, 13),
     "beta": (13, 30),
     "gamma": (30, 45),  # Usually 30-45Hz to avoid 50/60Hz line noise
-    "above_gamma": (45, 100)
+    "above_gamma": (45, 100),
+    "delta_beta": (1, 30),
 }
 
 # Convert provided indices to 0-based
