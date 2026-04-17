@@ -23,6 +23,7 @@ FREQ_BANDS = {
     "theta": (4, 8),
     "alpha": (8, 13),
     "beta": (13, 30),
+    "delta_gamma": (0.5, 45),
     "gamma": (30, 45),  # Usually 30-45Hz to avoid 50/60Hz line noise
     "above_gamma": (45, 100)
 }
@@ -547,6 +548,103 @@ def plot_all_trials_by_channel(epochs, channel_name, window_size=10, condition=N
                     pass
 
     return fig
+
+
+def compute_frequency_power(epochs, freq_bands=None, fmin=1, fmax=45, n_fft=256, n_overlap=None, average='mean'):
+    """
+    Compute power spectral density for each trial and channel, then integrate power
+    in specified frequency bands.
+
+    Parameters
+    ----------
+    epochs : mne.Epochs
+        The epochs object containing the data.
+    freq_bands : dict | None
+        Dictionary of frequency bands with keys as band names and values as (fmin, fmax) tuples.
+        If None, uses the global FREQ_BANDS.
+    fmin : float
+        Minimum frequency for PSD computation (Hz).
+    fmax : float
+        Maximum frequency for PSD computation (Hz).
+    n_fft : int
+        Length of the FFT window.
+    n_overlap : int | None
+        Number of overlapping samples. If None, defaults to n_fft // 2.
+    average : str
+        How to average the PSD. Options: 'mean', 'median'. Default 'mean'.
+
+    Returns
+    -------
+    power_df : pd.DataFrame
+        DataFrame with columns: trial, channel, band, power
+        Where power is the integrated power in that band for that trial/channel.
+    psds : dict
+        Dictionary with keys as (trial, channel) and values as (freqs, psd) arrays.
+    """
+    import pandas as pd
+    from scipy.signal import welch
+
+    if freq_bands is None:
+        freq_bands = FREQ_BANDS
+
+    if n_overlap is None:
+        n_overlap = n_fft // 2
+
+    # Get data from epochs
+    data = epochs.get_data()  # (n_epochs, n_channels, n_times)
+    sfreq = epochs.info['sfreq']
+    n_trials, n_channels, n_times = data.shape
+
+    # Compute PSD for all epochs using scipy.signal.welch
+    psds_list = []
+    freqs = None
+    for trial in range(n_trials):
+        trial_psds = []
+        for ch in range(n_channels):
+            f, psd = welch(data[trial, ch, :], fs=sfreq, nperseg=n_fft, noverlap=n_overlap)
+            trial_psds.append(psd)
+            if freqs is None:
+                freqs = f
+        psds_list.append(trial_psds)
+
+    # Filter frequencies to specified range
+    freq_mask = (freqs >= fmin) & (freqs <= fmax)
+    freqs_filtered = freqs[freq_mask]
+
+    # Prepare data for DataFrame
+    data_rows = []
+
+    for trial in range(n_trials):
+        for ch in range(n_channels):
+            psd_full = psds_list[trial][ch]
+            psd = psd_full[freq_mask]
+            
+            for band_name, (band_fmin, band_fmax) in freq_bands.items():
+                # Find frequency indices for this band
+                band_mask = (freqs_filtered >= band_fmin) & (freqs_filtered <= band_fmax)
+                if np.any(band_mask):
+                    # Integrate power in the band (sum of PSD values in the band)
+                    power = np.sum(psd[band_mask])
+                else:
+                    power = np.nan
+                data_rows.append({
+                    'trial': trial,
+                    'channel': epochs.ch_names[ch],
+                    'band': band_name,
+                    'power': power
+                })
+
+    power_df = pd.DataFrame(data_rows)
+
+    # Also return the full PSDs if needed
+    psds_dict = {}
+    for trial in range(n_trials):
+        for ch in range(n_channels):
+            psd_full = psds_list[trial][ch]
+            psd_filtered = psd_full[freq_mask]
+            psds_dict[(trial, epochs.ch_names[ch])] = (freqs_filtered, psd_filtered)
+
+    return power_df, psds_dict
 
 if __name__ == "__main__":
     # Optional quick demo when running this file directly.
