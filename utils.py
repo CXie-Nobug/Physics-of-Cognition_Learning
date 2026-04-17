@@ -4,7 +4,11 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 # EEG Channel Groups as requested in your provided info
+
 CHANNEL_GROUPS = {
+    "auditory_fc": ["F3", "FZ", "F4", "FC1", "FC2", "Cz"],
+    "tactile_central": ["C3", "Cz", "C4", "CP3", "CPZ", "CP4"],
+    "late_cp": ["CP1", "CPZ", "CP2", "P1", "P2", "POz"],
     "BLT": ["C3", "C4", "CP1", "CP2"],
     "BLA": ["T7", "T8", "TP7", "TP8"],
     # Multisensory Integration
