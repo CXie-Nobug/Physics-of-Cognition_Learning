@@ -3,12 +3,12 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scripts import global_settings
 
-
 def aggregate(
     erp_features_all_df: pd.DataFrame,
     component_windows: dict,
     ROI_NAME: str,
     CONDITION: str,
+    meta_cols=None,
 ):
     # =========================================================
     # 0) Check CONDITION
@@ -21,19 +21,52 @@ def aggregate(
     print("Subregions:", list(regions_of_interest.keys()))
 
     # =========================================================
-    # 1) Collect component feature columns
+    # 1) 自动识别 feature columns（排除 meta cols）
     # =========================================================
-    feature_cols = []
-    for comp in component_windows.keys():
-        feature_cols.extend([
-            f"{comp}_mean_amp",
-            f"{comp}_peak_amp",
-            f"{comp}_peak_lat_ms",
-        ])
+    if meta_cols is None:
+        meta_cols = [
+            "sub_id",
+            "trial_index",
+            "channel",
+            "condition",
+            "region",
+        ]
 
-    missing_cols = [col for col in feature_cols if col not in erp_features_all_df.columns]
-    if len(missing_cols) > 0:
-        raise ValueError(f"Missing feature columns in erp_features_all_df: {missing_cols}")
+    missing_meta_cols = [col for col in ["sub_id", "trial_index", "channel"] if col not in erp_features_all_df.columns]
+    if len(missing_meta_cols) > 0:
+        raise ValueError(
+            f"erp_features_all_df is missing required meta columns: {missing_meta_cols}"
+        )
+
+    feature_cols = [
+        col for col in erp_features_all_df.columns
+        if col not in meta_cols
+    ]
+
+    if len(feature_cols) == 0:
+        raise ValueError("No feature columns found after excluding meta_cols.")
+
+    # 只保留数值列，避免 object / string 列被错误聚合
+    non_numeric_feature_cols = [
+        col for col in feature_cols
+        if not pd.api.types.is_numeric_dtype(erp_features_all_df[col])
+    ]
+    if len(non_numeric_feature_cols) > 0:
+        print(
+            f"Warning: these non-numeric columns are excluded from feature_cols: "
+            f"{non_numeric_feature_cols}"
+        )
+
+    feature_cols = [
+        col for col in feature_cols
+        if pd.api.types.is_numeric_dtype(erp_features_all_df[col])
+    ]
+
+    if len(feature_cols) == 0:
+        raise ValueError("No numeric feature columns found after excluding meta_cols.")
+
+    print(f"Detected {len(feature_cols)} feature columns.")
+    print("Feature columns:", feature_cols)
 
     # =========================================================
     # 2) 按 subregion 分开计算
@@ -86,15 +119,13 @@ def aggregate(
 
             df_sub = df_sub.sort_values("trial_index").reset_index(drop=True)
 
-            for comp in component_windows.keys():
-                for suffix in ["mean_amp", "peak_amp", "peak_lat_ms"]:
-                    col = f"{comp}_{suffix}"
-                    roll_col = f"{col}_roll"
-                    df_sub[roll_col] = df_sub[col].rolling(
-                        window=global_settings.ROLLING_WINDOW,
-                        center=True,
-                        min_periods=1
-                    ).mean()
+            for col in feature_cols:
+                roll_col = f"{col}_roll"
+                df_sub[roll_col] = df_sub[col].rolling(
+                    window=global_settings.ROLLING_WINDOW,
+                    center=True,
+                    min_periods=1
+                ).mean()
 
             df_sub["condition"] = CONDITION
             df_sub["region"] = region_name
@@ -120,11 +151,10 @@ def aggregate(
                 "region": region_name,
             }
 
-            for comp in component_windows.keys():
-                for suffix in ["mean_amp", "peak_amp", "peak_lat_ms"]:
-                    roll_col = f"{comp}_{suffix}_roll"
-                    row[f"{roll_col}_mean"] = df_trial[roll_col].mean()
-                    row[f"{roll_col}_sem"] = df_trial[roll_col].sem()
+            for col in feature_cols:
+                roll_col = f"{col}_roll"
+                row[f"{roll_col}_mean"] = df_trial[roll_col].mean()
+                row[f"{roll_col}_sem"] = df_trial[roll_col].sem()
 
             group_rows.append(row)
 
@@ -135,7 +165,6 @@ def aggregate(
         )
 
         all_region_group_roll_df.append(erp_region_group_roll_df)
-
 
     # =========================================================
     # 3) 合并所有 subregion 的结果
@@ -157,7 +186,6 @@ def aggregate(
         ).reset_index(drop=True)
     else:
         erp_roi_group_roll_df = pd.DataFrame()
-
 
     # =========================================================
     # 4) display

@@ -2,7 +2,7 @@ roi_dict = {
     "auditory_fc": ["F3", "FZ", "F4", "FC1", "FC2", "Cz"],
     "tactile_central": ["C3", "Cz", "C4", "CP3", "CPZ", "CP4"],
     "late_cp": ["CP1", "CPZ", "CP2", "P1", "P2", "POz"],
-    "all_rois": ["F3", "FZ", "F4", "FC1", "FC2", "Cz", "C3", "C4", "CP3", "CPZ", "CP4", "CP1", "CP2", "P1", "P2", "POz"]
+    "all_rois": ["F3", "FZ", "F4", "FC1", "FC2", "Cz", "C3", "C4", "CP3", "CPZ", "CP4", "CP1", "CP2", "P1", "P2", "POz", "T7", "T8"]
 }
 
 roi_region_dict = {
@@ -26,7 +26,8 @@ roi_region_dict = {
         "C": ["C3", "Cz", "C4"],
         "CP": ["CP3", "CPZ", "CP4"],
         "P": ["P1", "P2"],
-        "PO": ["POz"]
+        "PO": ["POz"],
+        "T": ["T7", "T8"],
     }
 }
 
@@ -82,4 +83,10 @@ SEARCH_DICT = {
         "search_windows": auditory_search,
         "polarity_map": auditory_polarity,
     }
+}
+
+FREQ_BANDS = {
+    "theta": (4, 8),
+    "alpha": (8, 13),
+    "beta": (13, 30),
 }
