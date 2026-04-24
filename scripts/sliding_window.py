@@ -6,14 +6,14 @@ from scripts import global_settings
 def aggregate(
     erp_features_all_df: pd.DataFrame,
     component_windows: dict,
-    ROI_NAME: str,
     CONDITION: str,
+    ROI_NAME: str=None,
     meta_cols=None,
 ):
     # =========================================================
     # 0) Check CONDITION
     # =========================================================
-    regions_of_interest = global_settings.roi_region_dict.get(ROI_NAME, {})
+    regions_of_interest = global_settings.roi_region_dict.get(ROI_NAME, global_settings.roi_region_dict["all_rois_flat"])
     if len(regions_of_interest) == 0:
         raise ValueError(f"No regions found for CONDITION={ROI_NAME}")
 

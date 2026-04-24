@@ -9,6 +9,14 @@ from sklearn.cross_decomposition import CCA, PLSRegression
 from sklearn.preprocessing import StandardScaler
 from itertools import combinations
 
+import matplotlib.gridspec as gridspec
+from scipy.stats import ttest_rel, wilcoxon
+
+try:
+    from statsmodels.stats.multitest import multipletests
+except Exception:
+    multipletests = None
+
 
 # =========================================================
 # 0) small helpers
@@ -413,14 +421,112 @@ def plot_pca_loadings_and_scores(
     trial_col="trial_index",
     sub_col="sub_id",
     figsize=(8, 3),
+    b_plot_sig_effect=True,
+    b_use_fdr=True,
+    n_min_sig_window=3,
+    test_method="wilcoxon",  # "wilcoxon" or "ttest"
+    alpha=0.05,
 ):
     """
     For each region:
       left  = loading scatter (PC1 vs PC2)
       right = multi-PC score-vs-trial with SEM
+
+    Significance:
+      For each PC, compare trial t vs trial t-1 using subject-level paired test.
     """
 
     cmap = plt.get_cmap("tab10")
+
+    def _paired_trial_tests(scores_df, score_col):
+        pivot = scores_df.pivot_table(
+            index=sub_col,
+            columns=trial_col,
+            values=score_col,
+            aggfunc="mean",
+        )
+
+        trials = sorted(pivot.columns)
+        rows = []
+
+        for i in range(1, len(trials)):
+            t_prev = trials[i - 1]
+            t_curr = trials[i]
+
+            pair = pivot[[t_prev, t_curr]].dropna()
+            n = len(pair)
+
+            if n < 3:
+                stat, pval = np.nan, np.nan
+            else:
+                x = pair[t_prev].values
+                y = pair[t_curr].values
+
+                if test_method.lower() in ["ttest", "paired_ttest", "t"]:
+                    stat, pval = ttest_rel(y, x, nan_policy="omit")
+
+                elif test_method.lower() in ["wilcoxon", "nonparam", "nonparametric"]:
+                    try:
+                        stat, pval = wilcoxon(y, x)
+                    except ValueError:
+                        stat, pval = np.nan, 1.0
+                else:
+                    raise ValueError("test_method must be 'ttest' or 'wilcoxon'.")
+
+            rows.append({
+                trial_col: t_curr,
+                "prev_trial": t_prev,
+                "n": n,
+                "stat": stat,
+                "pval": pval,
+            })
+
+        out = pd.DataFrame(rows)
+
+        if len(out) == 0:
+            return out
+
+        valid = out["pval"].notna()
+
+        if b_use_fdr and multipletests is not None and valid.sum() > 0:
+            out.loc[valid, "pval_fdr"] = multipletests(
+                out.loc[valid, "pval"].values,
+                alpha=alpha,
+                method="fdr_bh",
+            )[1]
+            out["sig"] = out["pval_fdr"] < alpha
+        else:
+            out["pval_fdr"] = out["pval"]
+            out["sig"] = out["pval"] < alpha
+
+        return out
+
+    def _get_continuous_sig_ranges(test_df):
+        if test_df is None or len(test_df) == 0:
+            return []
+
+        sig_trials = test_df.loc[test_df["sig"], trial_col].values
+
+        if len(sig_trials) == 0:
+            return []
+
+        ranges = []
+        start = sig_trials[0]
+        prev = sig_trials[0]
+
+        for t in sig_trials[1:]:
+            if t == prev + 1:
+                prev = t
+            else:
+                if (prev - start + 1) >= n_min_sig_window:
+                    ranges.append((start, prev))
+                start = t
+                prev = t
+
+        if (prev - start + 1) >= n_min_sig_window:
+            ranges.append((start, prev))
+
+        return ranges
 
     for region, res in pca_results.items():
         if res is None:
@@ -450,7 +556,8 @@ def plot_pca_loadings_and_scores(
 
         ax.set_title(
             f"{region} loadings\n"
-            f"{pc_x} ({evr[pcx_idx]*100:.1f}%), {pc_y} ({evr[pcy_idx]*100:.1f}%)"
+            f"{pc_x} ({evr[pcx_idx]*100:.1f}%), "
+            f"{pc_y} ({evr[pcy_idx]*100:.1f}%)"
         )
         ax.set_xlabel(pc_x)
         ax.set_ylabel(pc_y)
@@ -460,9 +567,12 @@ def plot_pca_loadings_and_scores(
         # ========================
         ax = axes[1]
 
+        pc_colors = {}
+
         for i, pc in enumerate(pcs):
             pc_name = f"PC{pc}"
             color = cmap(i)
+            pc_colors[pc_name] = color
 
             grp = scores_df.groupby(trial_col)[pc_name]
             mean = grp.mean()
@@ -477,14 +587,41 @@ def plot_pca_loadings_and_scores(
                 color=color,
             )
 
+        if b_plot_sig_effect:
+            ymin, ymax = ax.get_ylim()
+            y_span = ymax - ymin
+
+            for i, pc in enumerate(pcs):
+                pc_name = f"PC{pc}"
+                color = pc_colors[pc_name]
+
+                test_df = _paired_trial_tests(scores_df, pc_name)
+                sig_ranges = _get_continuous_sig_ranges(test_df)
+
+                bar_y = ymax - (0.06 + i * 0.06) * y_span
+
+                for start, end in sig_ranges:
+                    ax.hlines(
+                        bar_y,
+                        start - 0.5,
+                        end + 0.5,
+                        color=color,
+                        lw=4,
+                        alpha=0.85,
+                    )
+
         ax.axhline(0, lw=1, ls="--")
         ax.set_title(f"{region} PC scores vs trial")
         ax.set_xlabel(trial_col)
         ax.set_ylabel("Score")
-        ax.set_xticks(np.arange(0,65,5))
+        ax.set_xticks(np.arange(0, 65, 5))
         ax.grid()
 
-        ax.legend(bbox_to_anchor=(1.0,0),loc="lower left",frameon=False)
+        ax.legend(
+            bbox_to_anchor=(1.0, 0),
+            loc="lower left",
+            frameon=False,
+        )
 
         plt.show()
 
@@ -723,16 +860,116 @@ def run_named_multiblock_synergy_analysis(
         y_name=y_block,
     )
 
-
 def plot_multiblock_results(
     multiblock_results,
     lv=1,
     trial_col="trial_index",
+    sub_col="sub_id",
     figsize=(6, 5),
+    b_plot_sig_effect=True,
+    b_use_fdr=True,
+    n_min_sig_window=3,
+    test_method="wilcoxon",  # "wilcoxon" or "ttest"
+    alpha=0.05,
 ):
-    import matplotlib.gridspec as gridspec
 
     lv_idx = lv - 1
+
+    def _paired_trial_tests(scores_df, score_col):
+        """
+        Compare score at trial t vs trial t-1 across subjects.
+        Return DataFrame with trial, pval, pval_fdr, sig.
+        """
+        pivot = scores_df.pivot_table(
+            index=sub_col,
+            columns=trial_col,
+            values=score_col,
+            aggfunc="mean"
+        )
+
+        trials = sorted(pivot.columns)
+        rows = []
+
+        for i in range(1, len(trials)):
+            t_prev = trials[i - 1]
+            t_curr = trials[i]
+
+            pair = pivot[[t_prev, t_curr]].dropna()
+            n = len(pair)
+
+            if n < 3:
+                pval = np.nan
+                stat = np.nan
+            else:
+                x = pair[t_prev].values
+                y = pair[t_curr].values
+
+                if test_method.lower() in ["ttest", "paired_ttest", "t"]:
+                    stat, pval = ttest_rel(y, x, nan_policy="omit")
+                elif test_method.lower() in ["wilcoxon", "nonparam", "nonparametric"]:
+                    try:
+                        stat, pval = wilcoxon(y, x)
+                    except ValueError:
+                        stat, pval = np.nan, 1.0
+                else:
+                    raise ValueError("test_method must be 'ttest' or 'wilcoxon'.")
+
+            rows.append({
+                trial_col: t_curr,
+                "prev_trial": t_prev,
+                "n": n,
+                "stat": stat,
+                "pval": pval,
+            })
+
+        out = pd.DataFrame(rows)
+
+        if len(out) == 0:
+            return out
+
+        valid = out["pval"].notna()
+
+        if b_use_fdr and multipletests is not None and valid.sum() > 0:
+            out.loc[valid, "pval_fdr"] = multipletests(
+                out.loc[valid, "pval"].values,
+                alpha=alpha,
+                method="fdr_bh"
+            )[1]
+            out["sig"] = out["pval_fdr"] < alpha
+        else:
+            out["pval_fdr"] = out["pval"]
+            out["sig"] = out["pval"] < alpha
+
+        return out
+
+    def _get_continuous_sig_ranges(test_df):
+        """
+        Keep only continuous significant runs with length >= n_min_sig_window.
+        """
+        if test_df is None or len(test_df) == 0:
+            return []
+
+        sig_trials = test_df.loc[test_df["sig"], trial_col].values
+        if len(sig_trials) == 0:
+            return []
+
+        ranges = []
+        start = sig_trials[0]
+        prev = sig_trials[0]
+
+        for t in sig_trials[1:]:
+            if t == prev + 1:
+                prev = t
+            else:
+                if (prev - start + 1) >= n_min_sig_window:
+                    ranges.append((start, prev))
+                start = t
+                prev = t
+
+        if (prev - start + 1) >= n_min_sig_window:
+            ranges.append((start, prev))
+
+        return ranges
 
     for region, res in multiblock_results.items():
         if res is None:
@@ -769,28 +1006,70 @@ def plot_multiblock_results(
         mean = grp.mean()
         sem = grp.sem()
 
-        ax_s.plot(mean.index, mean[x_col], label=x_col, lw=2)
-        ax_s.plot(mean.index, mean[y_col], label=y_col, lw=2)
+        line_x, = ax_s.plot(mean.index, mean[x_col], label=x_col, lw=2)
+        line_y, = ax_s.plot(mean.index, mean[y_col], label=y_col, lw=2)
+
+        color_x = line_x.get_color()
+        color_y = line_y.get_color()
 
         ax_s.fill_between(
             mean.index,
             mean[x_col] - sem[x_col],
             mean[x_col] + sem[x_col],
             alpha=0.2,
+            color=color_x,
         )
         ax_s.fill_between(
             mean.index,
             mean[y_col] - sem[y_col],
             mean[y_col] + sem[y_col],
             alpha=0.2,
+            color=color_y,
         )
+
+        if b_plot_sig_effect:
+            x_test = _paired_trial_tests(scores_df, x_col)
+            y_test = _paired_trial_tests(scores_df, y_col)
+
+            x_ranges = _get_continuous_sig_ranges(x_test)
+            y_ranges = _get_continuous_sig_ranges(y_test)
+
+            ymin, ymax = ax_s.get_ylim()
+            y_span = ymax - ymin
+
+            # significance bars near top
+            x_bar_y = ymax - 0.06 * y_span
+            y_bar_y = ymax - 0.12 * y_span
+
+            for start, end in x_ranges:
+                ax_s.hlines(
+                    x_bar_y,
+                    start - 0.5,
+                    end + 0.5,
+                    color=color_x,
+                    lw=4,
+                    alpha=0.8,
+                )
+
+            for start, end in y_ranges:
+                ax_s.hlines(
+                    y_bar_y,
+                    start - 0.5,
+                    end + 0.5,
+                    color=color_y,
+                    lw=4,
+                    alpha=0.8,
+                )
 
         ax_s.axhline(0, lw=1, ls="--")
         ax_s.set_title(
-            f"{region} LV{lv} score-vs-trial\npaired corr={res['pair_corrs'][lv_idx]:.3f}"
+            f"{region} LV{lv} score-vs-trial\n"
+            f"paired corr={res['pair_corrs'][lv_idx]:.3f}"
         )
+        ax_s.grid()
+        ax_s.set_xticks(np.arange(0,61,5))
         ax_s.set_xlabel(trial_col)
-        ax_s.legend(frameon=False)
+        ax_s.legend(bbox_to_anchor=(1.0,0.0), loc="lower left", frameon=False)
 
         plt.show()
 
