@@ -152,34 +152,63 @@ SEARCH_DICT = {
 FREQ_BANDS = {
     "theta": (4, 8),
     "alpha": (8, 13),
-    "beta": (13, 30),
+    # "beta": (13, 30),
 }
 
 erp_feature_cols ={
     "BLA": [
-        "P50_mean_amp", "P50_peak_amp", "P50_peak_lat_ms",
-        "N100_mean_amp", "N100_peak_amp", "N100_peak_lat_ms",
-        "P200_mean_amp", "P200_peak_amp", "P200_peak_lat_ms",
-        "N200_mean_amp", "N200_peak_amp", "N200_peak_lat_ms",
-        "P300_mean_amp", "P300_peak_amp", "P300_peak_lat_ms",
+        "P50_mean_amp", "P50_peak_lat_ms",
+        "N100_mean_amp", "N100_peak_lat_ms",
+        "P200_mean_amp", "P200_peak_lat_ms",
+        "N200_mean_amp", "N200_peak_lat_ms",
+        "P300_mean_amp", "P300_peak_lat_ms",
     ],
     "BLT": [
-        "P50_mean_amp", "P50_peak_amp", "P50_peak_lat_ms",
-        "N100_mean_amp", "N100_peak_amp", "N100_peak_lat_ms",
-        "P200_mean_amp", "P200_peak_amp", "P200_peak_lat_ms",
-        "N200_mean_amp", "N200_peak_amp", "N200_peak_lat_ms",
-        "P300_mean_amp", "P300_peak_amp", "P300_peak_lat_ms",
+        "P50_mean_amp", "P50_peak_lat_ms",
+        "N100_mean_amp", "N100_peak_lat_ms",
+        "P200_mean_amp", "P200_peak_lat_ms",
+        "N200_mean_amp", "N200_peak_lat_ms",
+        "P300_mean_amp", "P300_peak_lat_ms",
     ],
     "P3": [
-        "A_P50_mean_amp", "A_P50_peak_amp", "A_P50_peak_lat_ms",
-        "A_N100_mean_amp", "A_N100_peak_amp", "A_N100_peak_lat_ms",
-        "A_P200_mean_amp", "A_P200_peak_amp", "A_P200_peak_lat_ms",
-        "A_N200_mean_amp", "A_N200_peak_amp", "A_N200_peak_lat_ms",
-        "A_P300_mean_amp", "A_P300_peak_amp", "A_P300_peak_lat_ms",
-        "T_P50_mean_amp", "T_P50_peak_amp", "T_P50_peak_lat_ms",
-        "T_N100_mean_amp", "T_N100_peak_amp", "T_N100_peak_lat_ms",
-        "T_P200_mean_amp", "T_P200_peak_amp", "T_P200_peak_lat_ms",
-        "T_N200_mean_amp", "T_N200_peak_amp", "T_N200_peak_lat_ms",
-        "T_P300_mean_amp", "T_P300_peak_amp", "T_P300_peak_lat_ms",
+        "A_P50_mean_amp", "A_P50_peak_lat_ms",
+        "A_N100_mean_amp", "A_N100_peak_lat_ms",
+        "A_P200_mean_amp", "A_P200_peak_lat_ms",
+        "A_N200_mean_amp", "A_N200_peak_lat_ms",
+        "A_P300_mean_amp", "A_P300_peak_lat_ms",
+        "T_P50_mean_amp", "T_P50_peak_lat_ms",
+        "T_N100_mean_amp", "T_N100_peak_lat_ms",
+        "T_P200_mean_amp", "T_P200_peak_lat_ms",
+        "T_N200_mean_amp", "T_N200_peak_lat_ms",
+        "T_P300_mean_amp", "T_P300_peak_lat_ms",
     ]
-} 
+}
+
+# erp_feature_cols ={
+#     "BLA": [
+#         "P50_mean_amp", "P50_peak_amp", "P50_peak_lat_ms",
+#         "N100_mean_amp", "N100_peak_amp", "N100_peak_lat_ms",
+#         "P200_mean_amp", "P200_peak_amp", "P200_peak_lat_ms",
+#         "N200_mean_amp", "N200_peak_amp", "N200_peak_lat_ms",
+#         "P300_mean_amp", "P300_peak_amp", "P300_peak_lat_ms",
+#     ],
+#     "BLT": [
+#         "P50_mean_amp", "P50_peak_amp", "P50_peak_lat_ms",
+#         "N100_mean_amp", "N100_peak_amp", "N100_peak_lat_ms",
+#         "P200_mean_amp", "P200_peak_amp", "P200_peak_lat_ms",
+#         "N200_mean_amp", "N200_peak_amp", "N200_peak_lat_ms",
+#         "P300_mean_amp", "P300_peak_amp", "P300_peak_lat_ms",
+#     ],
+#     "P3": [
+#         "A_P50_mean_amp", "A_P50_peak_amp", "A_P50_peak_lat_ms",
+#         "A_N100_mean_amp", "A_N100_peak_amp", "A_N100_peak_lat_ms",
+#         "A_P200_mean_amp", "A_P200_peak_amp", "A_P200_peak_lat_ms",
+#         "A_N200_mean_amp", "A_N200_peak_amp", "A_N200_peak_lat_ms",
+#         "A_P300_mean_amp", "A_P300_peak_amp", "A_P300_peak_lat_ms",
+#         "T_P50_mean_amp", "T_P50_peak_amp", "T_P50_peak_lat_ms",
+#         "T_N100_mean_amp", "T_N100_peak_amp", "T_N100_peak_lat_ms",
+#         "T_P200_mean_amp", "T_P200_peak_amp", "T_P200_peak_lat_ms",
+#         "T_N200_mean_amp", "T_N200_peak_amp", "T_N200_peak_lat_ms",
+#         "T_P300_mean_amp", "T_P300_peak_amp", "T_P300_peak_lat_ms",
+#     ]
+# } 
