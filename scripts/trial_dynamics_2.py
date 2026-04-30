@@ -413,6 +413,16 @@ def run_group_pca_by_region(
     return pca_results
 
 
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from scipy.stats import ttest_rel, wilcoxon
+from scipy.signal import find_peaks, savgol_filter
+from statsmodels.stats.multitest import multipletests
+from pygam import LinearGAM, s
+
+
 def plot_pca_loadings_and_scores(
     pca_results,
     pc_x="PC1",
@@ -420,23 +430,56 @@ def plot_pca_loadings_and_scores(
     pcs=(1, 2, 3),
     trial_col="trial_index",
     sub_col="sub_id",
-    figsize=(8, 3),
+    figsize=(12, 3.2),
+
+    # significance
     b_plot_sig_effect=True,
     b_use_fdr=True,
     n_min_sig_window=3,
-    test_method="wilcoxon",  # "wilcoxon" or "ttest"
+    test_method="wilcoxon",
     alpha=0.05,
+
+    # GAM trend fitting
+    b_fit_gam=True,
+    gam_n_splines=8,
+    gam_lam=0.6,
+    gam_line_style="--",
+    gam_line_alpha=0.9,
+
+    # decomposition / oscillation
+    b_decompose=True,
+    osc_savgol_window=7,
+    osc_savgol_polyorder=2,
+    osc_prominence=0.10,
+    osc_min_distance=3,
+
+    b_print_summary=True,
 ):
     """
     For each region:
-      left  = loading scatter (PC1 vs PC2)
-      right = multi-PC score-vs-trial with SEM
+      subplot 1 = loading scatter
+      subplot 2 = PC score vs trial + SEM + GAM trend
+      subplot 3 = decomposition: GAM trend / oscillation / noise
 
-    Significance:
-      For each PC, compare trial t vs trial t-1 using subject-level paired test.
+    Decomposition:
+      observed_mean = GAM_trend + residual
+      residual = oscillation + noise
+
+      oscillation is estimated by Savitzky-Golay smoothing of residual.
+      noise = residual - oscillation
+
+    Returns
+    -------
+    gam_summary_df : pd.DataFrame
+    osc_summary_df : pd.DataFrame
+    decomp_df : pd.DataFrame
     """
 
     cmap = plt.get_cmap("tab10")
+
+    gam_summary_rows = []
+    osc_summary_rows = []
+    decomp_rows = []
 
     def _paired_trial_tests(scores_df, score_col):
         pivot = scores_df.pivot_table(
@@ -464,7 +507,6 @@ def plot_pca_loadings_and_scores(
 
                 if test_method.lower() in ["ttest", "paired_ttest", "t"]:
                     stat, pval = ttest_rel(y, x, nan_policy="omit")
-
                 elif test_method.lower() in ["wilcoxon", "nonparam", "nonparametric"]:
                     try:
                         stat, pval = wilcoxon(y, x)
@@ -488,7 +530,7 @@ def plot_pca_loadings_and_scores(
 
         valid = out["pval"].notna()
 
-        if b_use_fdr and multipletests is not None and valid.sum() > 0:
+        if b_use_fdr and valid.sum() > 0:
             out.loc[valid, "pval_fdr"] = multipletests(
                 out.loc[valid, "pval"].values,
                 alpha=alpha,
@@ -528,6 +570,90 @@ def plot_pca_loadings_and_scores(
 
         return ranges
 
+    def _fit_gam(x, y):
+        x = np.asarray(x).astype(float)
+        y = np.asarray(y).astype(float)
+
+        valid = np.isfinite(x) & np.isfinite(y)
+        x_valid = x[valid]
+        y_valid = y[valid]
+
+        if len(x_valid) < 5:
+            return None
+
+        X = x_valid.reshape(-1, 1)
+
+        gam = LinearGAM(
+            s(0, n_splines=min(gam_n_splines, len(x_valid) - 1)),
+            lam=gam_lam
+        ).fit(X, y_valid)
+
+        y_hat = gam.predict(X)
+
+        ss_res = np.sum((y_valid - y_hat) ** 2)
+        ss_tot = np.sum((y_valid - np.mean(y_valid)) ** 2)
+        r2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
+
+        edof = float(gam.statistics_["edof"])
+        aic = float(gam.statistics_["AIC"])
+        gcv = float(gam.statistics_["GCV"])
+
+        return {
+            "gam": gam,
+            "x": x_valid,
+            "y": y_valid,
+            "y_hat": y_hat,
+            "r2": r2,
+            "edof": edof,
+            "aic": aic,
+            "gcv": gcv,
+        }
+
+    def _decompose_residual(x, y, y_hat):
+        residual = y - y_hat
+
+        n = len(residual)
+        win = min(osc_savgol_window, n if n % 2 == 1 else n - 1)
+        if win < 5:
+            oscillation = residual.copy()
+        else:
+            if win % 2 == 0:
+                win -= 1
+            poly = min(osc_savgol_polyorder, win - 2)
+            oscillation = savgol_filter(residual, window_length=win, polyorder=poly)
+
+        noise = residual - oscillation
+
+        peaks, _ = find_peaks(
+            oscillation,
+            prominence=osc_prominence,
+            distance=osc_min_distance,
+        )
+        troughs, _ = find_peaks(
+            -oscillation,
+            prominence=osc_prominence,
+            distance=osc_min_distance,
+        )
+
+        zero_crossing_count = int(np.sum(np.diff(np.sign(oscillation)) != 0))
+
+        osc_amp = np.nanmax(oscillation) - np.nanmin(oscillation)
+
+        return {
+            "residual": residual,
+            "oscillation": oscillation,
+            "noise": noise,
+            "peaks": peaks,
+            "troughs": troughs,
+            "n_peaks": len(peaks),
+            "n_troughs": len(troughs),
+            "osc_sd": np.nanstd(oscillation, ddof=1),
+            "noise_sd": np.nanstd(noise, ddof=1),
+            "residual_sd": np.nanstd(residual, ddof=1),
+            "osc_amp": osc_amp,
+            "zero_crossing_count": zero_crossing_count,
+        }
+
     for region, res in pca_results.items():
         if res is None:
             continue
@@ -535,10 +661,17 @@ def plot_pca_loadings_and_scores(
         loadings = res["loadings_df"]
         scores_df = res["scores_df"]
 
-        fig, axes = plt.subplots(1, 2, figsize=figsize, constrained_layout=True)
+        width_ratios = [1.0, 1.5].append(1.5 for _ in pcs)
+
+        fig, axes = plt.subplots(
+            1, 2+len(pcs),
+            figsize=figsize,
+            constrained_layout=True,
+            gridspec_kw={"width_ratios": width_ratios},
+        )
 
         # ========================
-        # loadings
+        # 1) loadings
         # ========================
         ax = axes[0]
         ax.axhline(0, lw=1)
@@ -563,9 +696,10 @@ def plot_pca_loadings_and_scores(
         ax.set_ylabel(pc_y)
 
         # ========================
-        # multi-PC score vs trial
+        # 2) scores + GAM
         # ========================
         ax = axes[1]
+        ax_decomps = axes[2:]
 
         pc_colors = {}
 
@@ -578,15 +712,158 @@ def plot_pca_loadings_and_scores(
             mean = grp.mean()
             sem = grp.sem()
 
-            ax.plot(mean.index, mean.values, lw=2, label=pc_name, color=color)
+            x_trial = mean.index.values
+            y_mean = mean.values
+
+            ax.plot(
+                x_trial,
+                y_mean,
+                lw=2,
+                label=pc_name,
+                color=color,
+            )
             ax.fill_between(
-                mean.index,
-                mean.values - sem.values,
-                mean.values + sem.values,
+                x_trial,
+                y_mean - sem.values,
+                y_mean + sem.values,
                 alpha=0.2,
                 color=color,
             )
 
+            # ---------- GAM ----------
+            if b_fit_gam:
+                gam_res = _fit_gam(x_trial, y_mean)
+
+                if gam_res is not None:
+                    x_gam = gam_res["x"]
+                    y_gam = gam_res["y_hat"]
+
+                    ax.plot(
+                        x_gam,
+                        y_gam,
+                        lw=2,
+                        ls=gam_line_style,
+                        alpha=gam_line_alpha,
+                        color=color,
+                        label=f"{pc_name} GAM",
+                    )
+
+                    gam_summary_rows.append({
+                        "region": region,
+                        "pc": pc_name,
+                        "n_trials": len(x_gam),
+                        "r2": gam_res["r2"],
+                        "edof": gam_res["edof"],
+                        "aic": gam_res["aic"],
+                        "gcv": gam_res["gcv"],
+                        "gam_n_splines": gam_n_splines,
+                        "gam_lam": gam_lam,
+                    })
+
+                    # ---------- decomposition ----------
+                    if b_decompose:
+                        dec = _decompose_residual(
+                            gam_res["x"],
+                            gam_res["y"],
+                            gam_res["y_hat"],
+                        )
+
+                        osc_summary_rows.append({
+                            "region": region,
+                            "pc": pc_name,
+                            "residual_sd": dec["residual_sd"],
+                            "osc_sd": dec["osc_sd"],
+                            "noise_sd": dec["noise_sd"],
+                            "osc_amp": dec["osc_amp"],
+                            "n_peaks": dec["n_peaks"],
+                            "n_troughs": dec["n_troughs"],
+                            "zero_crossing_count": dec["zero_crossing_count"],
+                            "osc_prominence": osc_prominence,
+                            "osc_min_distance": osc_min_distance,
+                        })
+
+                        for xx, yy, trend, resid, osc, noi in zip(
+                            gam_res["x"],
+                            gam_res["y"],
+                            gam_res["y_hat"],
+                            dec["residual"],
+                            dec["oscillation"],
+                            dec["noise"],
+                        ):
+                            decomp_rows.append({
+                                "region": region,
+                                "pc": pc_name,
+                                trial_col: xx,
+                                "observed": yy,
+                                "trend_gam": trend,
+                                "residual": resid,
+                                "oscillation": osc,
+                                "noise": noi,
+                            })
+
+                        # 第三张图：为了避免太乱，只画 PC1 或 pcs 中第一个 PC 的 decomposition
+                        ax_decomp = ax_decomps[i]
+                        ax_decomp.plot(
+                            gam_res["x"],
+                            gam_res["y"],
+                            lw=1.5,
+                            color=color,
+                            alpha=0.45,
+                            label=f"{pc_name} observed",
+                        )
+                        ax_decomp.plot(
+                            gam_res["x"],
+                            gam_res["y_hat"],
+                            lw=2,
+                            color=color,
+                            label=f"{pc_name} GAM trend",
+                        )
+                        ax_decomp.plot(
+                            gam_res["x"],
+                            dec["oscillation"],
+                            lw=1.5,
+                            ls="-",
+                            color="black",
+                            label="oscillation",
+                        )
+                        ax_decomp.plot(
+                            gam_res["x"],
+                            dec["noise"],
+                            lw=1.5,
+                            ls="-.",
+                            color="gray",
+                            label="noise",
+                        )
+
+                        ax_decomp.fill_between(
+                            gam_res["x"],
+                            dec["oscillation"],
+                            0,
+                            alpha=0.1,
+                            color="black",
+                        )
+
+                        # if len(dec["peaks"]) > 0:
+                        #     ax_decomp.scatter(
+                        #         gam_res["x"][dec["peaks"]],
+                        #         dec["oscillation"][dec["peaks"]],
+                        #         s=25,
+                        #         color="black",
+                        #         marker="^",
+                        #         label="osc peaks",
+                        #     )
+
+                        # if len(dec["troughs"]) > 0:
+                        #     ax_decomp.scatter(
+                        #         gam_res["x"][dec["troughs"]],
+                        #         dec["oscillation"][dec["troughs"]],
+                        #         s=25,
+                        #         color="gray",
+                        #         marker="v",
+                        #         label="osc troughs",
+                        #     )
+
+        # significance bars
         if b_plot_sig_effect:
             ymin, ymax = ax.get_ylim()
             y_span = ymax - ymin
@@ -611,19 +888,71 @@ def plot_pca_loadings_and_scores(
                     )
 
         ax.axhline(0, lw=1, ls="--")
-        ax.set_title(f"{region} PC scores vs trial")
+        ax.set_title(f"{region} PC scores vs trial + GAM")
         ax.set_xlabel(trial_col)
         ax.set_ylabel("Score")
         ax.set_xticks(np.arange(0, 65, 5))
         ax.grid()
-
         ax.legend(
             bbox_to_anchor=(1.0, 0),
             loc="lower left",
             frameon=False,
+            fontsize=8,
         )
 
+        # ========================
+        # 3) decomposition
+        # ========================
+        for ax_decomp, pc in zip(ax_decomps, pcs):
+            ax_decomp.axhline(0, lw=1, ls="--")
+            ax_decomp.set_title(f"{region} trend / oscillation / noise\nshown for PC{pc}")
+            ax_decomp.set_xlabel(trial_col)
+            ax_decomp.set_ylabel("Score / residual")
+            ax_decomp.set_xticks(np.arange(0, 65, 5))
+            ax_decomp.grid()
+            ax_decomp.legend(
+                bbox_to_anchor=(1.0, 0),
+                loc="lower left",
+                frameon=False,
+                fontsize=8,
+            )
+
+        axes_to_sync = axes[1:]
+
+        ymins = []
+        ymaxs = []
+
+        for ax in axes_to_sync:
+            ymin, ymax = ax.get_ylim()
+            ymins.append(ymin)
+            ymaxs.append(ymax)
+
+        global_ymin = np.min(ymins)
+        global_ymax = np.max(ymaxs)
+
+        for ax in axes_to_sync:
+            ax.set_ylim(global_ymin, global_ymax)
+
         plt.show()
+
+    gam_summary_df = pd.DataFrame(gam_summary_rows)
+    osc_summary_df = pd.DataFrame(osc_summary_rows)
+    decomp_df = pd.DataFrame(decomp_rows)
+
+    if b_print_summary:
+        print("\n================ GAM summary ================")
+        if len(gam_summary_df) > 0:
+            print(gam_summary_df.round(4))
+        else:
+            print("No GAM results.")
+
+        print("\n============= Oscillation summary =============")
+        if len(osc_summary_df) > 0:
+            print(osc_summary_df.round(4))
+        else:
+            print("No oscillation results.")
+
+    return gam_summary_df, osc_summary_df, decomp_df
 
 
 # =========================================================
@@ -1134,6 +1463,17 @@ def run_erp_synergy_pipeline(
     )
     resid_cols = [f"{c}_resid" for c in feature_cols]
 
+    # ---- build block dict on residualized columns
+    if block_dict is None:
+        resid_block_dict = _make_named_feature_blocks(resid_cols)
+    else:
+        resid_block_dict = {}
+        for block_name, cols in block_dict.items():
+            resid_block_dict[block_name] = [
+                c if c.endswith("_resid") else f"{c}_resid"
+                for c in cols
+            ]
+
     # ---- correlation
     corr_raw = compute_group_level_correlation(
         df=df,
@@ -1149,8 +1489,24 @@ def run_erp_synergy_pipeline(
         sub_col=sub_col,
     )
 
-    # ---- PCA on residuals
-    pca_res = run_group_pca_by_region(
+        # ---- raw block dict
+    if block_dict is None:
+        raw_block_dict = _make_named_feature_blocks(feature_cols)
+    else:
+        raw_block_dict = block_dict
+
+    # ---- PCA on raw + residuals
+    pca_all_raw = run_group_pca_by_region(
+        df=df,
+        feature_cols=feature_cols,
+        region_col=region_col,
+        sub_col=sub_col,
+        trial_col=trial_col,
+        n_components=pca_n_components,
+        zscore_within_subject=zscore_within_subject,
+    )
+
+    pca_all_res = run_group_pca_by_region(
         df=df_resid,
         feature_cols=resid_cols,
         region_col=region_col,
@@ -1160,16 +1516,102 @@ def run_erp_synergy_pipeline(
         zscore_within_subject=False,
     )
 
-    # ---- build block dict on residualized columns
-    if block_dict is None:
-        resid_block_dict = _make_named_feature_blocks(resid_cols)
-    else:
-        resid_block_dict = {}
-        for block_name, cols in block_dict.items():
-            resid_block_dict[block_name] = [
-                c if c.endswith("_resid") else f"{c}_resid"
-                for c in cols
-            ]
+    pca_block_raw = {"amp": None, "lat": None, "freq": None}
+    pca_block_res = {"amp": None, "lat": None, "freq": None}
+
+    for block_name in ["amp", "lat", "freq"]:
+        # ----- raw PCA
+        raw_cols = raw_block_dict.get(block_name, []) if raw_block_dict is not None else []
+        raw_cols = [c for c in raw_cols if c in df.columns]
+
+        if len(raw_cols) >= 2:
+            pca_block_raw[block_name] = run_group_pca_by_region(
+                df=df,
+                feature_cols=raw_cols,
+                region_col=region_col,
+                sub_col=sub_col,
+                trial_col=trial_col,
+                n_components=min(pca_n_components, len(raw_cols)),
+                zscore_within_subject=zscore_within_subject,
+            )
+
+        # ----- residual PCA
+        resid_cols_block = resid_block_dict.get(block_name, []) if resid_block_dict is not None else []
+        resid_cols_block = [c for c in resid_cols_block if c in df_resid.columns]
+
+        if len(resid_cols_block) >= 2:
+            pca_block_res[block_name] = run_group_pca_by_region(
+                df=df_resid,
+                feature_cols=resid_cols_block,
+                region_col=region_col,
+                sub_col=sub_col,
+                trial_col=trial_col,
+                n_components=min(pca_n_components, len(resid_cols_block)),
+                zscore_within_subject=False,
+            )
+
+    pca_amp_raw = pca_block_raw["amp"]
+    pca_lat_raw = pca_block_raw["lat"]
+    pca_freq_raw = pca_block_raw["freq"]
+
+    pca_amp_res = pca_block_res["amp"]
+    pca_lat_res = pca_block_res["lat"]
+    pca_freq_res = pca_block_res["freq"]
+
+    # ---- PCA on residuals
+    pca_all_res = run_group_pca_by_region(
+        df=df_resid,
+        feature_cols=resid_cols,
+        region_col=region_col,
+        sub_col=sub_col,
+        trial_col=trial_col,
+        n_components=pca_n_components,
+        zscore_within_subject=False,
+    )
+
+    pca_block_res = {
+        "amp": None,
+        "lat": None,
+        "freq": None,
+    }
+
+    def to_resid_cols(cols, df_resid, suffix="_resid"):
+        out = []
+        for c in cols:
+            if c in df_resid.columns:
+                out.append(c)
+            elif f"{c}{suffix}" in df_resid.columns:
+                out.append(f"{c}{suffix}")
+        return out
+
+
+    block_dict = resid_block_dict
+
+    if block_dict is not None:
+        for block_name in ["amp", "lat", "freq"]:
+            block_cols = block_dict.get(block_name, None)
+
+            if block_cols is None or len(block_cols) == 0:
+                continue
+
+            block_cols_resid = to_resid_cols(block_cols, df_resid)
+
+            if len(block_cols_resid) < 2:
+                continue
+
+            pca_block_res[block_name] = run_group_pca_by_region(
+                df=df_resid,
+                feature_cols=block_cols_resid,
+                region_col=region_col,
+                sub_col=sub_col,
+                trial_col=trial_col,
+                n_components=min(pca_n_components, len(block_cols_resid)),
+                zscore_within_subject=False,
+            )
+
+    pca_amp_res = pca_block_res["amp"]
+    pca_lat_res = pca_block_res["lat"]
+    pca_freq_res = pca_block_res["freq"]
 
     # only keep non-empty valid blocks
     resid_block_dict = {
@@ -1219,9 +1661,25 @@ def run_erp_synergy_pipeline(
     out = {
         "df_resid": df_resid,
         "beta_df": beta_df,
+
         "corr_raw": corr_raw,
         "corr_resid": corr_resid,
-        "pca_res": pca_res,
+
+        "pca_all_raw": pca_all_raw,
+        "pca_all_res": pca_all_res,
+
+        "pca_amp_raw": pca_amp_raw,
+        "pca_amp_res": pca_amp_res,
+
+        "pca_lat_raw": pca_lat_raw,
+        "pca_lat_res": pca_lat_res,
+
+        "pca_freq_raw": pca_freq_raw,
+        "pca_freq_res": pca_freq_res,
+
+        # optional backward compatibility
+        "pca_res": pca_all_res,
+
         "feature_cols": feature_cols,
         "resid_cols": resid_cols,
         "block_dict": resid_block_dict,

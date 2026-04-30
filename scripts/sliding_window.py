@@ -7,17 +7,23 @@ def aggregate(
     erp_features_all_df: pd.DataFrame,
     component_windows: dict,
     CONDITION: str,
-    ROI_NAME: str=None,
+    ROI_NAME: str = None,
     meta_cols=None,
+    b_remove_head_tail_rolling: bool = True,
 ):
     # =========================================================
-    # 0) Check CONDITION
+    # 0) Check ROI / CONDITION
     # =========================================================
-    regions_of_interest = global_settings.roi_region_dict.get(ROI_NAME, global_settings.roi_region_dict["all_rois_flat"])
-    if len(regions_of_interest) == 0:
-        raise ValueError(f"No regions found for CONDITION={ROI_NAME}")
+    regions_of_interest = global_settings.roi_region_dict.get(
+        ROI_NAME,
+        global_settings.roi_region_dict["all_rois_flat"]
+    )
 
-    print(f"CONDITION = {ROI_NAME}")
+    if len(regions_of_interest) == 0:
+        raise ValueError(f"No regions found for ROI_NAME={ROI_NAME}")
+
+    print(f"ROI_NAME = {ROI_NAME}")
+    print(f"CONDITION = {CONDITION}")
     print("Subregions:", list(regions_of_interest.keys()))
 
     # =========================================================
@@ -32,7 +38,12 @@ def aggregate(
             "region",
         ]
 
-    missing_meta_cols = [col for col in ["sub_id", "trial_index", "channel"] if col not in erp_features_all_df.columns]
+    required_cols = ["sub_id", "trial_index", "channel"]
+    missing_meta_cols = [
+        col for col in required_cols
+        if col not in erp_features_all_df.columns
+    ]
+
     if len(missing_meta_cols) > 0:
         raise ValueError(
             f"erp_features_all_df is missing required meta columns: {missing_meta_cols}"
@@ -46,14 +57,15 @@ def aggregate(
     if len(feature_cols) == 0:
         raise ValueError("No feature columns found after excluding meta_cols.")
 
-    # 只保留数值列，避免 object / string 列被错误聚合
+    # 只保留数值列
     non_numeric_feature_cols = [
         col for col in feature_cols
         if not pd.api.types.is_numeric_dtype(erp_features_all_df[col])
     ]
+
     if len(non_numeric_feature_cols) > 0:
         print(
-            f"Warning: these non-numeric columns are excluded from feature_cols: "
+            "Warning: these non-numeric columns are excluded from feature_cols: "
             f"{non_numeric_feature_cols}"
         )
 
@@ -67,6 +79,8 @@ def aggregate(
 
     print(f"Detected {len(feature_cols)} feature columns.")
     print("Feature columns:", feature_cols)
+
+    rolling_window = global_settings.ROLLING_WINDOW
 
     # =========================================================
     # 2) 按 subregion 分开计算
@@ -114,6 +128,7 @@ def aggregate(
 
         for sub_id in erp_region_features_df["sub_id"].unique():
             df_sub = erp_region_features_df.query("sub_id == @sub_id").copy()
+
             if len(df_sub) == 0:
                 continue
 
@@ -121,11 +136,30 @@ def aggregate(
 
             for col in feature_cols:
                 roll_col = f"{col}_roll"
-                df_sub[roll_col] = df_sub[col].rolling(
-                    window=global_settings.ROLLING_WINDOW,
+                n_col = f"{col}_roll_n"
+
+                rolling_obj = df_sub[col].rolling(
+                    window=rolling_window,
                     center=True,
                     min_periods=1
-                ).mean()
+                )
+
+                df_sub[roll_col] = rolling_obj.mean()
+                df_sub[n_col] = rolling_obj.count()
+
+            # -------------------------------------------------
+            # remove head/tail trials whose rolling window is incomplete
+            # -------------------------------------------------
+            if b_remove_head_tail_rolling:
+                valid_mask = df_sub[f"{feature_cols[0]}_roll_n"] >= rolling_window
+                df_sub = df_sub[valid_mask].copy()
+
+                if len(df_sub) == 0:
+                    print(
+                        f"  Skipped sub_id={sub_id}: "
+                        f"no full rolling window after removing head/tail."
+                    )
+                    continue
 
             df_sub["condition"] = CONDITION
             df_sub["region"] = region_name
@@ -144,7 +178,10 @@ def aggregate(
         # -----------------------------------------------------
         group_rows = []
 
-        for trial_index, df_trial in erp_region_roll_df.groupby("trial_index", observed=True):
+        for trial_index, df_trial in erp_region_roll_df.groupby(
+            "trial_index",
+            observed=True
+        ):
             row = {
                 "trial_index": trial_index,
                 "condition": CONDITION,
@@ -158,6 +195,10 @@ def aggregate(
 
             group_rows.append(row)
 
+        if len(group_rows) == 0:
+            print(f"  Skipped: no group average result for region {region_name}")
+            continue
+
         erp_region_group_roll_df = (
             pd.DataFrame(group_rows)
             .sort_values("trial_index")
@@ -170,20 +211,32 @@ def aggregate(
     # 3) 合并所有 subregion 的结果
     # =========================================================
     if len(all_region_subject_feature_df) > 0:
-        erp_roi_features_df = pd.concat(all_region_subject_feature_df, ignore_index=True)
+        erp_roi_features_df = pd.concat(
+            all_region_subject_feature_df,
+            ignore_index=True
+        )
     else:
         erp_roi_features_df = pd.DataFrame()
 
     if len(all_region_subject_roll_df) > 0:
-        erp_roi_roll_df = pd.concat(all_region_subject_roll_df, ignore_index=True)
+        erp_roi_roll_df = pd.concat(
+            all_region_subject_roll_df,
+            ignore_index=True
+        )
     else:
         erp_roi_roll_df = pd.DataFrame()
 
     if len(all_region_group_roll_df) > 0:
-        erp_roi_group_roll_df = pd.concat(all_region_group_roll_df, ignore_index=True)
-        erp_roi_group_roll_df = erp_roi_group_roll_df.sort_values(
-            ["region", "trial_index"]
-        ).reset_index(drop=True)
+        erp_roi_group_roll_df = pd.concat(
+            all_region_group_roll_df,
+            ignore_index=True
+        )
+
+        erp_roi_group_roll_df = (
+            erp_roi_group_roll_df
+            .sort_values(["region", "trial_index"])
+            .reset_index(drop=True)
+        )
     else:
         erp_roi_group_roll_df = pd.DataFrame()
 

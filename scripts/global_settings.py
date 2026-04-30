@@ -152,7 +152,7 @@ SEARCH_DICT = {
 FREQ_BANDS = {
     "theta": (4, 8),
     "alpha": (8, 13),
-    # "beta": (13, 30),
+    "beta": (13, 30),
 }
 
 erp_feature_cols ={

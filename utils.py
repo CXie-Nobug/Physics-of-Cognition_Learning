@@ -27,7 +27,7 @@ FREQ_BANDS = {
     "beta": (13, 30),
     "gamma": (30, 45),  # Usually 30-45Hz to avoid 50/60Hz line noise
     "above_gamma": (45, 100),
-    "delta_beta": (1, 30),
+    "delta_gamma": (0.5, 45),
 }
 
 # Convert provided indices to 0-based
